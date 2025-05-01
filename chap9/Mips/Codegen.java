@@ -61,6 +61,9 @@ public class Codegen {
   }
 
   void munchStm(Tree.MOVE s) {
+    Temp to = munchExp(s.dst);
+		Temp from = munchExp(s.src);
+		emit(new Assem.MOVE("move `d0,`s0", to, from));
   }
 
   void munchStm(Tree.UEXP s) {
@@ -68,6 +71,8 @@ public class Codegen {
   }
 
   void munchStm(Tree.JUMP s) {
+    LabelList targets = s.targets;
+    emit(new Assem.OPER("j " + targets.head, null, null, targets));
   }
 
   private static String[] CJUMP = new String[10];
@@ -85,9 +90,17 @@ public class Codegen {
   }
 
   void munchStm(Tree.CJUMP s) {
+    String operation = CJUMP[s.relop];
+    Temp left = munchExp(s.left);
+    Temp right = munchExp(s.right);
+    TempList valueList = L(left, L(right));
+    LabelList jumpList = new LabelList(s.iftrue, new LabelList(s.iffalse, null));
+     emit(new Assem.OPER(operation + "`s0, `s1, `j0", null, valueList, jumpList));
   }
 
   void munchStm(Tree.LABEL l) {
+    String name = l.label.toString();
+    emit(new Assem.LABEL(name + ":", l.label));
   }
 
   Temp munchExp(Tree.Exp s) {
@@ -108,11 +121,20 @@ public class Codegen {
   }
 
   Temp munchExp(Tree.CONST e) {
-    return frame.ZERO;
+    if (e.value != 0) {
+      Temp temp = new Temp();
+      TempList list = L(temp);
+      emit(new Assem.OPER("li `d0," + e.value, list, null));
+      return temp;
+    } else {
+      return frame.ZERO;
+    }
   }
 
   Temp munchExp(Tree.NAME e) {
-    return frame.ZERO;
+    Temp temp = new Temp();
+    emit(OPER("la `d0 " + e.label.toString(), L(temp), null));
+    return temp;
   }
 
   Temp munchExp(Tree.TEMP e) {
@@ -143,23 +165,84 @@ public class Codegen {
     int shift = 0;
     if ((i >= 2) && ((i & (i - 1)) == 0)) {
       while (i > 1) {
-	shift += 1;
-	i >>= 1;
+	      shift += 1;
+	      i >>= 1;
       }
     }
     return shift;
   }
 
   Temp munchExp(Tree.BINOP e) {
-    return frame.ZERO;
+    if (e.left instanceof Tree.CONST && e.right instanceof Tree.CONST) {
+      return munchExp(e, (Tree.CONST)e.left, (Tree.CONST)e.right);
+    } else if (e.left instanceof Tree.CONST) {
+      return munchExp(e, (Tree.CONST)e.left, e.right);
+    } else if (e.right instanceof Tree.CONST) {
+      return munchExp(e, e.left, (Tree.CONST)e.right);
+    }
+    Temp temp = new Temp();
+    TempList tempList = L(temp);
+    String operation = BINOP[e.binop];
+    Temp left = munchExp(e.left);
+    Temp right = munchExp(e.right);
+    TempList operandList = L(left, L(right, null));
+    emit(new Assem.OPER(operation + " `d0, `s0,`s1", tempList, operandList));
+    return temp;
+  }
+
+  Temp munchExp(Tree.BINOP e, Tree.CONST left, Tree.CONST right) {
+    Temp temp = new Temp();
+    TempList tempList = L(temp);
+    String operation = BINOP[e.binop];
+    emit(new Assem.OPER(operation + " `d0," + left.value +  "," + right.value, tempList, null));
+    return temp;
+  }
+  Temp munchExp(Tree.BINOP e, Tree.Exp left, Tree.CONST right) {
+    Temp temp = new Temp();
+    TempList tempList = L(temp);
+    String operation = BINOP[e.binop];
+    Temp leftTemp = munchExp(left);
+    TempList operandList = L(leftTemp);
+    emit(new Assem.OPER(operation + " `d0, `s0," + right.value, tempList, operandList));
+    return temp;
+  }
+  Temp munchExp(Tree.BINOP e, Tree.CONST left, Tree.Exp right) {
+    Temp temp = new Temp();
+    TempList tempList = L(temp);
+    String operation = BINOP[e.binop];
+    Temp rightTemp = munchExp(right);
+    TempList operandList = L(rightTemp);
+    emit(new Assem.OPER(operation + " `d0," + left.value + ", `s0", tempList, operandList));
+    return temp;
   }
 
   Temp munchExp(Tree.MEM e) {
-    return frame.ZERO;
+    if (e.exp instanceof Tree.CONST) {
+      return munchExp(e, (Tree.CONST)e.exp);
+    }
+    Temp t = new Temp();
+    emit(OPER("lw `d0 (`s0)", L(t), L(munchExp(e.exp))));
+    return t;
   }
 
   Temp munchExp(Tree.CALL s) {
-    return frame.ZERO;
+    if (s.func instanceof Tree.NAME) {
+      return munchExp(s, (Tree.NAME) s.func);
+    }
+    emit(OPER("jal `d0 `s0", frame.calldefs, L(munchExp(s.func), munchArgs(0, s.args))));
+    return frame.V0;
+  }
+
+  Temp munchExp(Tree.MEM e, Tree.CONST c) {
+    Temp t = new Temp();
+    emit(OPER("lw `d0 " + c.value, L(t), null));
+    return t;
+  }
+
+  Temp munchExp(Tree.CALL s, Tree.NAME name) {
+    String label = name.label.toString();
+    emit(OPER("jal " + name,  frame.calldefs, munchArgs(0, s.args)));
+    return frame.V0;
   }
 
   private TempList munchArgs(int i, Tree.ExpList args) {
